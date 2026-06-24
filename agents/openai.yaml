@@ -1,0 +1,4 @@
+interface:
+  display_name: "PPT To ImagesGallery"
+  short_description: "Convert PPT + manuscript to imagesgallery JSON"
+  default_prompt: "Use $ppt-to-imagesgallery to convert a PPT and aligned manuscript into an imagesgallery output."

@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>__TITLE__</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --line: #e7ebf3;
+      --text: #111827;
+      --muted: #6b7280;
+      --accent: #16a34a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .wrap {
+      width: min(1400px, 96vw);
+      margin: 20px auto;
+      display: grid;
+      grid-template-rows: auto auto;
+      gap: 14px;
+    }
+    .viewer {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      height: min(74vh, 760px);
+      min-height: 560px;
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr) 420px;
+      overflow: hidden;
+    }
+    .thumbs {
+      border-right: 1px solid var(--line);
+      padding: 12px 8px;
+      height: 100%;
+      overflow-y: auto;
+      overflow-x: hidden;
+      background: #fbfcff;
+    }
+    .thumb {
+      cursor: pointer;
+      border: 2px solid transparent;
+      border-radius: 8px;
+      padding: 4px;
+      margin-bottom: 8px;
+      background: #fff;
+    }
+    .thumb.active { border-color: var(--accent); }
+    .thumb .pageno {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .thumb img {
+      width: 100%;
+      display: block;
+      border-radius: 4px;
+      border: 1px solid var(--line);
+    }
+    .stage {
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #fff;
+      height: 100%;
+    }
+    .stage img {
+      width: 100%;
+      height: calc(100% - 2px);
+      object-fit: contain;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+    .bar {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px 14px;
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      align-items: center;
+      gap: 10px;
+    }
+    audio { width: 100%; }
+    .meta {
+      font-size: 13px;
+      color: var(--muted);
+      white-space: nowrap;
+      min-width: 200px;
+      text-align: right;
+    }
+    .speed select {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 8px;
+      background: #fff;
+    }
+    .subtitle {
+      border-left: 1px solid var(--line);
+      padding: 18px;
+      height: 100%;
+      overflow-y: auto;
+      background: #fcfdff;
+      line-height: 1.8;
+      white-space: pre-wrap;
+      font-size: 18px;
+    }
+    .subtitle h3 {
+      margin: 0 0 12px 0;
+      font-size: 28px;
+      line-height: 1.25;
+    }
+    @media (max-width: 920px) {
+      .viewer { grid-template-columns: 1fr; }
+      .viewer { height: auto; }
+      .thumbs {
+        order: 2;
+        height: 210px;
+        border-right: 0;
+        border-top: 1px solid var(--line);
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 6px;
+      }
+      .subtitle {
+        order: 3;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+        min-height: 180px;
+      }
+      .thumb { margin-bottom: 0; }
+      .bar { grid-template-columns: 1fr; }
+      .subtitle h3 { font-size: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="viewer">
+      <aside id="thumbs" class="thumbs"></aside>
+      <section class="stage">
+        <img id="mainImage" alt="slide preview" />
+      </section>
+      <section class="subtitle">
+        <h3 id="subtitleTitle"></h3>
+        <div id="subtitleText"></div>
+      </section>
+    </div>
+
+    <section class="bar">
+      <audio id="audio" controls preload="metadata">
+        <source src="__AUDIO_SRC__" type="audio/mpeg" />
+      </audio>
+      <div class="meta">
+        <span id="metaText"></span>
+        <span>&nbsp;|&nbsp;</span>
+        <span id="timeText">00:00 / 00:00</span>
+      </div>
+      <div class="speed">
+        <select id="speedSelect">
+          <option value="0.8">0.8x</option>
+          <option value="1.0" selected>1.0x</option>
+          <option value="1.1">1.1x</option>
+          <option value="1.25">1.25x</option>
+          <option value="1.5">1.5x</option>
+        </select>
+      </div>
+    </section>
+
+  </div>
+
+  <script id="payload" type="application/json">__DATA_JSON__</script>
+  <script>
+    const data = JSON.parse(document.getElementById("payload").textContent);
+    const items = [...data.items].sort((a, b) => Number(a.page) - Number(b.page));
+    const audio = document.getElementById("audio");
+    const mainImage = document.getElementById("mainImage");
+    const subtitleTitle = document.getElementById("subtitleTitle");
+    const subtitleText = document.getElementById("subtitleText");
+    const thumbs = document.getElementById("thumbs");
+    const metaText = document.getElementById("metaText");
+    const timeText = document.getElementById("timeText");
+    const speedSelect = document.getElementById("speedSelect");
+
+    let currentIndex = 0;
+    const thumbNodes = [];
+    const SEEK_EPSILON_MS = 80;
+    let pendingSeekIndex = -1;
+    let pendingSeekUntil = 0;
+
+    function findIndexByMs(ms) {
+      for (let i = 0; i < items.length; i++) {
+        const start = Number(items[i].start);
+        const end = Number(items[i].end);
+        const isFirst = i === 0;
+        const isLast = i === items.length - 1;
+        const lower = isFirst ? start : start - SEEK_EPSILON_MS;
+        const upper = isLast ? end + SEEK_EPSILON_MS : end + SEEK_EPSILON_MS;
+        if (ms >= lower && ms < upper) return i;
+      }
+      return items.length - 1;
+    }
+
+    function updateActive(index, scrollThumb = false) {
+      currentIndex = index;
+      const item = items[index];
+      mainImage.src = item.image;
+      subtitleTitle.textContent = `第 ${item.page} 页 / 共 ${items.length} 页`;
+      subtitleText.textContent = item.subtitle || "";
+      metaText.textContent = `${item.page} / ${items.length}`;
+
+      thumbNodes.forEach((n, i) => n.classList.toggle("active", i === index));
+      if (scrollThumb && thumbNodes[index]) {
+        thumbNodes[index].scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    }
+
+    function formatClock(seconds) {
+      const s = Math.max(0, Math.floor(seconds || 0));
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const sec = s % 60;
+      if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+      return `${m}:${String(sec).padStart(2, "0")}`;
+    }
+
+    function updateClock() {
+      const cur = formatClock(audio.currentTime || 0);
+      const dur = formatClock(audio.duration || 0);
+      timeText.textContent = `${cur} / ${dur}`;
+    }
+
+    function seekToIndex(index) {
+      const item = items[index];
+      pendingSeekIndex = index;
+      pendingSeekUntil = Date.now() + 800;
+      audio.currentTime = Number(item.start) / 1000;
+      updateActive(index, true);
+    }
+
+    items.forEach((item, idx) => {
+      const node = document.createElement("div");
+      node.className = "thumb";
+      node.innerHTML = `
+        <div class="pageno">${item.page}</div>
+        <img src="${item.image}" alt="slide-${item.page}" />
+      `;
+      node.addEventListener("click", () => seekToIndex(idx));
+      thumbNodes.push(node);
+      thumbs.appendChild(node);
+    });
+
+    speedSelect.addEventListener("change", () => {
+      audio.playbackRate = Number(speedSelect.value);
+    });
+
+    audio.addEventListener("loadedmetadata", () => {
+      updateActive(0, true);
+      updateClock();
+      audio.playbackRate = Number(speedSelect.value);
+    });
+
+    audio.addEventListener("timeupdate", () => {
+      const ms = audio.currentTime * 1000;
+      let idx = findIndexByMs(ms);
+      if (pendingSeekIndex >= 0 && Date.now() < pendingSeekUntil) {
+        idx = pendingSeekIndex;
+      } else {
+        pendingSeekIndex = -1;
+      }
+      if (idx !== currentIndex) updateActive(idx, true);
+      updateClock();
+    });
+
+    audio.addEventListener("durationchange", updateClock);
+    audio.addEventListener("seeked", () => {
+      updateClock();
+      if (pendingSeekIndex >= 0) {
+        updateActive(pendingSeekIndex, true);
+        pendingSeekIndex = -1;
+      }
+    });
+    audio.addEventListener("play", updateClock);
+    audio.addEventListener("pause", updateClock);
+
+    updateActive(0, false);
+    updateClock();
+  </script>
+</body>
+</html>
