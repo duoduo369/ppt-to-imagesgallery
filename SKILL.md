@@ -51,15 +51,15 @@ bl auth login --api-key <USER_API_KEY>
 ```bash
 python3 scripts/build_imagesgallery.py \
   --ppt /path/to/slides.pptx \
-  --speech /path/to/manuscript.md \
+  --speech /path/to/manuscript.docx \
   --out /path/to/output \
   --dry-run
 ```
 
 Output directory:
 
-- `/path/to/output/imagesgallery/images/page-001.png` ...
-- `/path/to/output/imagesgallery/imagesgallery.json` (dry-run placeholder speech; overwrite in-session)
+- `/path/to/output/<ppt_name>/imagesgallery/images/page-001.png` ...
+- `/path/to/output/<ppt_name>/imagesgallery/imagesgallery.json` (dry-run placeholder speech; overwrite in-session)
 
 ## Workflow
 
@@ -76,7 +76,7 @@ Output directory:
 ```bash
 python3 scripts/build_imagesgallery.py \
   --ppt <file.ppt|file.pptx> \
-  --speech <file.md|file.txt> \
+  --speech <file.docx|file.md|file.txt> \
   --out <dir> \
   --dry-run
 ```
@@ -84,9 +84,22 @@ python3 scripts/build_imagesgallery.py \
 Arguments:
 
 - `--ppt`: input slide deck.
-- `--speech`: full manuscript that matches the PPT.
-- `--out`: output base directory; script writes to `<out>/imagesgallery`.
+- `--speech`: full manuscript that matches the PPT; supports `.docx`/`.md`/`.txt` (recommended: `.docx` from Word, including table content).
+- `--out`: output base directory; script writes to `<out>/<ppt_name>/imagesgallery`.
 - `--dry-run`: compatibility flag; script always generates images + manifest skeleton only.
+
+## Ops Input Standard (Recommended)
+
+For operation teams, use this stable workflow:
+
+1. Prepare one PPT file and one full-script Word file (`.docx`) in the same folder.
+2. Keep rich text in Word (headings, bold, bullet lists); do not export to plain `.txt`.
+3. Run the skill with `--speech` pointing to the `.docx`.
+
+Why:
+
+- Plain `.txt` drops formatting.
+- `.docx` preserves structure better, and the script converts major formatting to Markdown-like text for later subtitle rendering (headings, bold/italic, lists, and tables).
 
 ## Session Matching Rules
 
@@ -140,11 +153,12 @@ import sys
 root = Path(".codex/skills/ppt-to-imagesgallery/scripts").resolve()
 sys.path.insert(0, str(root))
 from align_manuscript import normalize_for_alignment, strict_consume_pages, is_substantive_gap
+from build_imagesgallery import read_manuscript
 
-manifest = Path("/path/to/output/imagesgallery/imagesgallery.json")
+manifest = Path("/path/to/output/<ppt_name>/imagesgallery/imagesgallery.json")
 data = json.loads(manifest.read_text(encoding="utf-8"))
 speech_path = Path(data["source_speech"])
-manuscript = normalize_for_alignment(speech_path.read_text(encoding="utf-8"))
+manuscript = normalize_for_alignment(read_manuscript(speech_path))
 # Supports both stage schemas:
 pages = [
     item.get("speech", item.get("subtitle", ""))
@@ -171,7 +185,7 @@ After `imagesgallery.json` is finalized:
 
 ```bash
 python3 scripts/synthesize_imagesgallery_audio.py \
-  --manifest /path/to/output/imagesgallery/imagesgallery.json \
+  --manifest /path/to/output/<ppt_name>/imagesgallery/imagesgallery.json \
   --voice longxiaochun_v3 \
   --rate 1.1 \
   --gap-seconds 1 \
@@ -181,10 +195,10 @@ python3 scripts/synthesize_imagesgallery_audio.py \
 
 Outputs:
 
-- `/path/to/output/imagesgallery/audio/segments/page-001.mp3` ...
-- `/path/to/output/imagesgallery/audio/full_speech.mp3`
-- `/path/to/output/imagesgallery/audio/speech_timestamps.json`
-- `/path/to/output/imagesgallery/preview.html`
+- `/path/to/output/<ppt_name>/imagesgallery/audio/segments/page-001.mp3` ...
+- `/path/to/output/<ppt_name>/imagesgallery/audio/full_speech.mp3`
+- `/path/to/output/<ppt_name>/imagesgallery/audio/speech_timestamps.json`
+- `/path/to/output/<ppt_name>/imagesgallery/preview.html`
 
 Timestamp rule:
 
