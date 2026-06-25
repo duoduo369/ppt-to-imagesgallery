@@ -70,6 +70,7 @@ Output directory:
 5. Validate JSON shape and manuscript continuity.
 6. Synthesize per-page speech to MP3, merge into one full MP3 with 1s gap between segments, and export continuous timestamps.
 7. Generate `preview.html` in output for voiced PPT playback preview (auto page switch + subtitle sync).
+8. If running on Windows, check `references/windows_troubleshooting.md` first when any environment/tool issue appears.
 
 ## Command Interface
 
@@ -105,7 +106,6 @@ Why:
 
 - Do not call `bl omni` for slicing.
 - Use the current Codex session model to assign manuscript segments to each page.
-- Use `references/prompt_full_speech_session.md` as the single source of slicing constraints.
 - Run as full-deck one-shot slicing (all page images + full manuscript in one request).
 - Model output must be strict JSON only:
   - `pages: [{page_number, speech}]`
@@ -178,6 +178,19 @@ PY
 - `scripts/align_manuscript.py`: manuscript normalization and continuity checks.
 - `scripts/synthesize_imagesgallery_audio.py`: per-segment TTS, merged MP3, and timeline timestamps.
 - `references/prompt_full_speech_session.md`: default full-deck session slicing prompt.
+- `references/windows_troubleshooting.md`: Windows known issues and fixes for ops runs.
+
+## Windows Notes (Important)
+
+To reduce repeated operator failures on Windows:
+
+- If `soffice` is missing, `build_imagesgallery.py` now auto-falls back to PowerPoint COM export for `.ppt/.pptx`.
+- TTS synthesis now uses `bl ... --text-file` per page instead of `--text`.
+- Subprocess output decoding is forced to UTF-8 to avoid common GBK decode crashes.
+
+For full troubleshooting and command-level checks, use:
+
+- `references/windows_troubleshooting.md`
 
 ## Audio Synthesis
 

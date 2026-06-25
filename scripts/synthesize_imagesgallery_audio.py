@@ -25,6 +25,8 @@ def run_cmd(cmd: Sequence[str]) -> subprocess.CompletedProcess:
     proc = subprocess.run(
         list(cmd),
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
@@ -153,6 +155,8 @@ def build_audio(args: argparse.Namespace) -> Dict[str, object]:
     segments_dir = out_dir / "segments"
     out_dir.mkdir(parents=True, exist_ok=True)
     segments_dir.mkdir(parents=True, exist_ok=True)
+    texts_dir = out_dir / "texts"
+    texts_dir.mkdir(parents=True, exist_ok=True)
 
     bl_bin = resolve_bin("bl")
     ffmpeg_bin = resolve_bin("ffmpeg")
@@ -167,6 +171,8 @@ def build_audio(args: argparse.Namespace) -> Dict[str, object]:
 
         seg_path = segments_dir / f"page-{page_number:03d}.mp3"
         if not (args.skip_existing and seg_path.exists()):
+            text_file = texts_dir / f"page-{page_number:03d}.txt"
+            text_file.write_text(speech, encoding="utf-8")
             cmd = [
                 bl_bin,
                 "speech",
@@ -175,8 +181,8 @@ def build_audio(args: argparse.Namespace) -> Dict[str, object]:
                 args.voice,
                 "--rate",
                 str(args.rate),
-                "--text",
-                speech,
+                "--text-file",
+                str(text_file),
                 "--format",
                 "mp3",
                 "--out",
@@ -190,6 +196,8 @@ def build_audio(args: argparse.Namespace) -> Dict[str, object]:
             if args.language:
                 cmd.extend(["--language", args.language])
             run_cmd(cmd)
+            if not seg_path.exists():
+                raise RuntimeError(f"tts did not generate segment audio: {seg_path}")
 
         duration = ffprobe_duration(ffprobe_bin, seg_path)
         segment_rows.append(

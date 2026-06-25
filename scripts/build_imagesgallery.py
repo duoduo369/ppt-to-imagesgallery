@@ -41,6 +41,8 @@ def run_cmd(cmd: Sequence[str], cwd: Path | None = None) -> subprocess.Completed
         list(cmd),
         cwd=str(cwd) if cwd else None,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
@@ -68,7 +70,44 @@ def _sorted_page_images(paths: Iterable[Path]) -> List[Path]:
     return sorted(paths, key=key)
 
 
-def convert_ppt_to_images(ppt_path: Path, images_dir: Path, soffice_bin: str, pdftoppm_bin: str) -> List[Path]:
+def _export_ppt_via_powerpoint_com(ppt_path: Path, images_dir: Path) -> List[Path]:
+    """Windows fallback: export slides directly via PowerPoint COM when soffice is unavailable."""
+    if not sys.platform.startswith("win"):
+        raise RuntimeError("PowerPoint COM export is only supported on Windows")
+
+    ppt_escaped = str(ppt_path).replace("'", "''")
+    out_escaped = str(images_dir).replace("'", "''")
+    ps_script = f"""
+$ErrorActionPreference='Stop'
+$ppt='{ppt_escaped}'
+$out='{out_escaped}'
+$app = New-Object -ComObject PowerPoint.Application
+$pres = $app.Presentations.Open($ppt, $false, $false, $false)
+try {{
+  $count = $pres.Slides.Count
+  for ($i = 1; $i -le $count; $i++) {{
+    $dest = Join-Path $out ("page-{{0:D3}}.png" -f $i)
+    $pres.Slides.Item($i).Export($dest, "PNG")
+  }}
+  Write-Output $count
+}} finally {{
+  $pres.Close()
+  $app.Quit()
+}}
+"""
+    run_cmd(["powershell", "-NoProfile", "-Command", ps_script])
+    images = _sorted_page_images(images_dir.glob("page-*.png"))
+    if not images:
+        raise RuntimeError("PowerPoint COM export produced no PNG files")
+    return images
+
+
+def convert_ppt_to_images(
+    ppt_path: Path,
+    images_dir: Path,
+    soffice_bin: str | None,
+    pdftoppm_bin: str | None,
+) -> List[Path]:
     """Convert PPT/PDF to sequential PNG files under images_dir."""
     suffix = ppt_path.suffix.lower()
     if suffix not in {".ppt", ".pptx", ".pdf"}:
@@ -81,6 +120,9 @@ def convert_ppt_to_images(ppt_path: Path, images_dir: Path, soffice_bin: str, pd
         if suffix == ".pdf":
             pdf_path = ppt_path
         else:
+            if not soffice_bin:
+                # Fallback for Windows ops machines without LibreOffice.
+                return _export_ppt_via_powerpoint_com(ppt_path, images_dir)
             run_cmd([
                 soffice_bin,
                 "--headless",
@@ -99,6 +141,8 @@ def convert_ppt_to_images(ppt_path: Path, images_dir: Path, soffice_bin: str, pd
                     raise RuntimeError("soffice conversion succeeded but no PDF output was found")
                 pdf_path = candidates[0]
 
+        if not pdftoppm_bin:
+            raise FileNotFoundError("required executable not found: pdftoppm")
         ppm_prefix = tmp_dir / "slide"
         run_cmd([pdftoppm_bin, "-png", str(pdf_path), str(ppm_prefix)])
 
@@ -141,10 +185,10 @@ def _read_docx_manuscript(path: Path) -> str:
         text = "".join(chunks)
         if not text:
             return ""
+        # Keep emphasis stable for downstream slicing/TTS:
+        # prefer bold marker; avoid nested/stacked stars that produce *** / **** noise.
         if run.find("./w:rPr/w:b", ns) is not None:
             text = f"**{text}**"
-        if run.find("./w:rPr/w:i", ns) is not None:
-            text = f"*{text}*"
         return text
 
     def _parse_paragraph(para: ET.Element) -> str:
@@ -231,6 +275,10 @@ def _read_docx_manuscript(path: Path) -> str:
     # Collapse excessive blanks while keeping paragraph boundaries.
     out = "\n".join(lines)
     out = re.sub(r"\n{3,}", "\n\n", out)
+    # Normalize accidental emphasis stacking produced by rich-text copies.
+    out = re.sub(r"\*{4,}", "**", out)
+    out = re.sub(r"(?<!\*)\*\*\*(?!\*)", "**", out)
+    out = re.sub(r"\u00a0", " ", out)
     return out.strip()
 
 
@@ -260,8 +308,15 @@ def build_imagesgallery(args: argparse.Namespace) -> Dict[str, object]:
         shutil.rmtree(gallery_dir)
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    soffice_bin = resolve_bin("soffice")
-    pdftoppm_bin = resolve_bin("pdftoppm")
+    try:
+        soffice_bin = resolve_bin("soffice")
+    except FileNotFoundError:
+        if sys.platform.startswith("win") and ppt_path.suffix.lower() in {".ppt", ".pptx"}:
+            soffice_bin = None
+        else:
+            raise
+    need_pdftoppm = (ppt_path.suffix.lower() == ".pdf") or (soffice_bin is not None)
+    pdftoppm_bin = resolve_bin("pdftoppm") if need_pdftoppm else None
     image_abs_paths = convert_ppt_to_images(ppt_path, images_dir, soffice_bin=soffice_bin, pdftoppm_bin=pdftoppm_bin)
 
     manuscript_raw = read_manuscript(speech_path)
