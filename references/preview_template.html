@@ -216,13 +216,78 @@
       const item = items[index];
       mainImage.src = item.image;
       subtitleTitle.textContent = `第 ${item.page} 页 / 共 ${items.length} 页`;
-      subtitleText.textContent = item.subtitle || "";
+      subtitleText.innerHTML = renderMarkdown(item.subtitle || "");
       metaText.textContent = `${item.page} / ${items.length}`;
 
       thumbNodes.forEach((n, i) => n.classList.toggle("active", i === index));
       if (scrollThumb && thumbNodes[index]) {
         thumbNodes[index].scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
+    }
+
+    function renderInlineMarkdown(text) {
+      const escaped = String(text || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+      return escaped
+        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+        .replace(/(^|[\\s(])\*(.+?)\*(?=[\\s),.!?;:，。！？；：]|$)/g, "$1<em>$2</em>");
+    }
+
+    function renderMarkdown(text) {
+      const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+      const html = [];
+      let inList = false;
+      let paragraph = [];
+
+      function flushParagraph() {
+        if (!paragraph.length) return;
+        html.push(`<p>${renderInlineMarkdown(paragraph.join("<br>"))}</p>`);
+        paragraph = [];
+      }
+
+      function closeList() {
+        if (!inList) return;
+        html.push("</ul>");
+        inList = false;
+      }
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) {
+          flushParagraph();
+          closeList();
+          continue;
+        }
+
+        const heading = line.match(/^(#{1,6})\s+(.+)$/);
+        if (heading) {
+          flushParagraph();
+          closeList();
+          const level = Math.min(6, heading[1].length);
+          html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+          continue;
+        }
+
+        const listItem = line.match(/^[-*]\s+(.+)$/);
+        if (listItem) {
+          flushParagraph();
+          if (!inList) {
+            html.push("<ul>");
+            inList = true;
+          }
+          html.push(`<li>${renderInlineMarkdown(listItem[1])}</li>`);
+          continue;
+        }
+
+        closeList();
+        paragraph.push(line);
+      }
+
+      flushParagraph();
+      closeList();
+      return html.join("");
     }
 
     function formatClock(seconds) {
