@@ -106,6 +106,12 @@ Why:
 
 - Do not call `bl omni` for slicing.
 - Use the current Codex session model to assign manuscript segments to each page.
+- **Mandatory:** read `references/prompt_full_speech_session.md` verbatim and use it as the single source of slicing constraints.
+- **Forbidden:** do not invent, rewrite, summarize, or "optimize" another slicing prompt in place of `references/prompt_full_speech_session.md`.
+- This skill is atomic and self-contained: do not depend on any external repo paths or files at runtime.
+- `references/prompt_full_speech_session.md` is the in-skill canonical prompt snapshot for full-manuscript page slicing.
+- If slicing behavior needs to change, update this skill's own prompt file first, then update this SKILL.md accordingly.
+- Preserve manuscript Markdown structure when writing page `speech`: keep headings, blank-line paragraph boundaries, and list markers from the source manuscript. Do not run page output through alignment-only normalization before saving it back to `imagesgallery.json`.
 - Run as full-deck one-shot slicing (all page images + full manuscript in one request).
 - Model output must be strict JSON only:
   - `pages: [{page_number, speech}]`
@@ -115,7 +121,7 @@ Why:
 
 Recommended process for better slicing accuracy:
 
-1. Read `references/prompt_full_speech_session.md`.
+1. Read `references/prompt_full_speech_session.md` in full and paste/follow its constraints directly.
 2. Attach all page images in order (`page-001.png ... page-NNN.png`).
 3. Provide the full manuscript in one request (not remaining-tail batches).
 4. Ask model to return strict JSON only (no prose/code fence):

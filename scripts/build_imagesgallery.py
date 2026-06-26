@@ -11,7 +11,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Sequence
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -21,6 +21,104 @@ from align_manuscript import normalize_for_alignment
 
 
 VERSION = "1.0"
+PROMPT_FULL_SPEECH_SESSION_PATH = SCRIPT_DIR.parent / "references" / "prompt_full_speech_session.md"
+
+
+def load_full_speech_session_prompt() -> str:
+    return PROMPT_FULL_SPEECH_SESSION_PATH.read_text(encoding="utf-8").strip()
+
+
+def _extract_json_text(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("empty model output")
+
+    fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        return fenced.group(1).strip()
+
+    if text.startswith("{") and text.endswith("}"):
+        return text
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        return text[start : end + 1].strip()
+    raise ValueError("json object not found in model output")
+
+
+def parse_bl_omni_stdout(output: str) -> str:
+    text = (output or "").strip()
+    if not text:
+        raise ValueError("empty bl omni output")
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+    if isinstance(payload, dict):
+        for key in ("content", "output_text", "text"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return text
+
+
+def validate_batch_result(payload: Dict[str, Any], expected_page_numbers: Sequence[int]) -> List[str]:
+    pages = payload.get("pages")
+    if not isinstance(pages, list):
+        raise ValueError("payload.pages must be a list")
+
+    ordered: List[str] = []
+    got_page_numbers: List[int] = []
+    for item in pages:
+        if not isinstance(item, dict):
+            raise ValueError("each page item must be an object")
+        page_number = item.get("page_number")
+        if not isinstance(page_number, int):
+            raise ValueError("page_number must be an integer")
+        speech = item.get("speech")
+        if not isinstance(speech, str) or not speech.strip():
+            raise ValueError(f"speech must be a non-empty string for page {page_number}")
+        got_page_numbers.append(page_number)
+        ordered.append(speech.strip())
+
+    if list(expected_page_numbers) != got_page_numbers:
+        raise ValueError(f"page_number sequence mismatch: expected {list(expected_page_numbers)}, got {got_page_numbers}")
+    return ordered
+
+
+def run_batch_with_retries(
+    invoke: Callable[[str], str],
+    expected_page_numbers: Sequence[int],
+    max_retries: int = 2,
+    post_validate: Callable[[Sequence[str]], None] | None = None,
+) -> List[str]:
+    if max_retries < 1:
+        raise ValueError("max_retries must be >= 1")
+
+    prompt_text = load_full_speech_session_prompt()
+    retry_note = ""
+    last_exc: Exception | None = None
+
+    for _attempt in range(1, max_retries + 1):
+        try:
+            raw = invoke(f"{prompt_text}{retry_note}")
+            payload = json.loads(_extract_json_text(parse_bl_omni_stdout(raw)))
+            ordered = validate_batch_result(payload, expected_page_numbers)
+            if post_validate is not None:
+                post_validate(ordered)
+            return ordered
+        except Exception as exc:
+            last_exc = exc
+            retry_note = (
+                "\n\n## 上次输出修正要求\n"
+                f"- 上次输出未通过校验：{exc}\n"
+                "- 请继续严格遵守以上 canonical prompt，只返回修正后的 JSON。\n"
+            )
+
+    raise RuntimeError(f"batch slicing failed after {max_retries} attempt(s): {last_exc}")
 
 
 def resolve_bin(name: str) -> str:
@@ -173,6 +271,77 @@ def _read_docx_manuscript(path: Path) -> str:
         t = t.replace("\n", "<br>")
         return t
 
+    def _heading_level_from_style_token(token: str) -> int:
+        if not token:
+            return 0
+        cleaned = token.strip()
+        patterns = (
+            r"Heading\s*([1-6])$",
+            r"heading\s*([1-6])$",
+            r"标题\s*([1-6])$",
+            r"标题([1-6])$",
+        )
+        for pattern in patterns:
+            match = re.match(pattern, cleaned, re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+        return 0
+
+    def _load_style_heading_levels(zf: zipfile.ZipFile) -> Dict[str, int]:
+        try:
+            styles_root = ET.fromstring(zf.read("word/styles.xml"))
+        except KeyError:
+            return {}
+
+        direct_levels: Dict[str, int] = {}
+        based_on: Dict[str, str] = {}
+
+        for style in styles_root.findall("./w:style", ns):
+            style_id = style.attrib.get(_w("styleId"), "").strip()
+            if not style_id:
+                continue
+
+            level = _heading_level_from_style_token(style_id)
+            if not level:
+                name = style.find("./w:name", ns)
+                if name is not None:
+                    level = _heading_level_from_style_token(name.attrib.get(_w("val"), ""))
+            if not level:
+                outline = style.find("./w:pPr/w:outlineLvl", ns)
+                if outline is not None:
+                    outline_val = outline.attrib.get(_w("val"), "").strip()
+                    if outline_val.isdigit():
+                        level = int(outline_val) + 1
+
+            direct_levels[style_id] = level
+
+            parent = style.find("./w:basedOn", ns)
+            if parent is not None:
+                parent_id = parent.attrib.get(_w("val"), "").strip()
+                if parent_id:
+                    based_on[style_id] = parent_id
+
+        resolved: Dict[str, int] = {}
+
+        def resolve(style_id: str) -> int:
+            if style_id in resolved:
+                return resolved[style_id]
+            level = direct_levels.get(style_id, 0)
+            if level:
+                resolved[style_id] = level
+                return level
+            parent_id = based_on.get(style_id, "")
+            if not parent_id or parent_id == style_id:
+                resolved[style_id] = 0
+                return 0
+            level = resolve(parent_id)
+            resolved[style_id] = level
+            return level
+
+        for style_id in set(direct_levels) | set(based_on):
+            resolve(style_id)
+        return resolved
+
     def _parse_run_text(run: ET.Element) -> str:
         chunks: List[str] = []
         for node in run:
@@ -191,7 +360,7 @@ def _read_docx_manuscript(path: Path) -> str:
             text = f"**{text}**"
         return text
 
-    def _parse_paragraph(para: ET.Element) -> str:
+    def _parse_paragraph(para: ET.Element, style_heading_levels: Dict[str, int]) -> str:
         texts: List[str] = []
         is_list = para.find(".//w:numPr", ns) is not None
 
@@ -199,9 +368,15 @@ def _read_docx_manuscript(path: Path) -> str:
         heading_level = 0
         if pstyle is not None:
             style_val = pstyle.attrib.get(f"{{{wns}}}val", "")
-            m = re.match(r"Heading([1-6])$", style_val, re.IGNORECASE)
-            if m:
-                heading_level = int(m.group(1))
+            heading_level = _heading_level_from_style_token(style_val)
+            if not heading_level:
+                heading_level = style_heading_levels.get(style_val, 0)
+        if not heading_level:
+            outline = para.find("./w:pPr/w:outlineLvl", ns)
+            if outline is not None:
+                outline_val = outline.attrib.get(_w("val"), "").strip()
+                if outline_val.isdigit():
+                    heading_level = int(outline_val) + 1
 
         for run in para.findall("./w:r", ns):
             run_text = _parse_run_text(run)
@@ -251,6 +426,7 @@ def _read_docx_manuscript(path: Path) -> str:
         return md_lines
 
     with zipfile.ZipFile(path) as zf:
+        style_heading_levels = _load_style_heading_levels(zf)
         with zf.open("word/document.xml") as f:
             root = ET.parse(f).getroot()
 
@@ -261,7 +437,7 @@ def _read_docx_manuscript(path: Path) -> str:
 
     for child in list(body):
         if child.tag == _w("p"):
-            para_text = _parse_paragraph(child)
+            para_text = _parse_paragraph(child, style_heading_levels)
             if para_text:
                 lines.append(para_text)
             else:
